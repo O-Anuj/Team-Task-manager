@@ -19,9 +19,11 @@ export default function ProjectDetail() {
   
   const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [isProjectEditModalOpen, setIsProjectEditModalOpen] = useState(false);
   const [isMemberModalOpen, setIsMemberModalOpen] = useState(false);
   const [isMembersListViewOpen, setIsMembersListViewOpen] = useState(false);
   const [newTask, setNewTask] = useState({ title: '', description: '', priority: 'Medium' as Priority, assignee_id: '', due_date: '' });
+  const [projectEditData, setProjectEditData] = useState({ name: '', description: '' });
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [newMember, setNewMember] = useState({ email: '', role: 'Member' });
@@ -135,6 +137,21 @@ export default function ProjectDetail() {
     }
   };
 
+  const handleProjectUpdate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSubmitting(true);
+    try {
+      await api.projects.update(id!, projectEditData);
+      setProject({ ...project!, ...projectEditData });
+      setIsProjectEditModalOpen(false);
+      toast.success('Project updated');
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to update project');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   const handleAddMember = async (e: React.FormEvent) => {
     e.preventDefault();
     if (newMember.email === currentUser?.email) {
@@ -194,6 +211,18 @@ export default function ProjectDetail() {
         <div>
           <div className="flex items-center gap-3 mb-2">
             <h2 className="text-2xl font-bold text-slate-900">{project.name}</h2>
+            {project.role === 'Admin' && (
+              <button 
+                onClick={() => {
+                  setProjectEditData({ name: project.name, description: project.description || '' });
+                  setIsProjectEditModalOpen(true);
+                }}
+                className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded"
+                title="Edit Project Details"
+              >
+                <MoreVertical size={16} />
+              </button>
+            )}
             <span className={`px-2 py-0.5 rounded text-xs font-semibold ${
               project.role === 'Admin' ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-600'
             }`}>
@@ -265,17 +294,19 @@ export default function ProjectDetail() {
               onChange={(e) => setSearchQuery(e.target.value)}
             />
         </div>
-        <button
-          onClick={() => setShowOnlyMyTasks(!showOnlyMyTasks)}
-          className={`px-4 py-2 rounded-xl text-xs font-bold border transition-all flex items-center gap-2 ${
-            showOnlyMyTasks 
-              ? 'bg-indigo-600 border-indigo-600 text-white shadow-md shadow-indigo-100' 
-              : 'bg-white border-slate-200 text-slate-600 hover:border-indigo-300'
-          }`}
-        >
-          <Users size={14} />
-          {showOnlyMyTasks ? 'Showing My Tasks' : 'Showing All Tasks'}
-        </button>
+        {project.role === 'Admin' && (
+          <button
+            onClick={() => setShowOnlyMyTasks(!showOnlyMyTasks)}
+            className={`px-4 py-2 rounded-xl text-xs font-bold border transition-all flex items-center gap-2 ${
+              showOnlyMyTasks 
+                ? 'bg-indigo-600 border-indigo-600 text-white shadow-md shadow-indigo-100' 
+                : 'bg-white border-slate-200 text-slate-600 hover:border-indigo-300'
+            }`}
+          >
+            <Users size={14} />
+            {showOnlyMyTasks ? 'Showing My Tasks' : 'Showing All Tasks'}
+          </button>
+        )}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -716,6 +747,56 @@ export default function ProjectDetail() {
                 </div>
               ))}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Project Edit Modal */}
+      {isProjectEditModalOpen && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[60] p-4">
+          <div className="bg-white rounded-2xl w-full max-w-lg p-8 shadow-2xl relative">
+            <button onClick={() => setIsProjectEditModalOpen(false)} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600">
+                <X size={20} />
+            </button>
+            <h3 className="text-xl font-bold text-slate-900 mb-6">Edit Project Details</h3>
+            <form onSubmit={handleProjectUpdate} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Project Name</label>
+                <input
+                  type="text"
+                  required
+                  className="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
+                  value={projectEditData.name}
+                  onChange={(e) => setProjectEditData({ ...projectEditData, name: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Description</label>
+                <textarea
+                  rows={4}
+                  className="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
+                  value={projectEditData.description}
+                  onChange={(e) => setProjectEditData({ ...projectEditData, description: e.target.value })}
+                />
+              </div>
+              <div className="flex gap-3 pt-4">
+                <button
+                  type="button"
+                  onClick={() => setIsProjectEditModalOpen(false)}
+                  className="flex-1 px-4 py-2 border border-slate-200 rounded-lg text-slate-600 font-semibold hover:bg-slate-50 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmitting}
+                  className="flex-1 bg-indigo-600 text-white px-4 py-2 rounded-lg font-semibold hover:bg-indigo-700 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                >
+                  {isSubmitting && <Loader2 size={16} className="animate-spin" />}
+                  Update Project
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

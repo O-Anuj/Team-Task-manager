@@ -4,6 +4,7 @@ import { api } from '../services/api';
 
 interface AuthContextType {
   user: User | null;
+  currentUser: User | null;
   loading: boolean;
   login: (token: string, user: User) => void;
   logout: () => void;
@@ -38,7 +39,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout }}>
+    <AuthContext.Provider value={{ user, currentUser: user, loading, login, logout }}>
       {children}
     </AuthContext.Provider>
   );

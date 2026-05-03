@@ -12,7 +12,7 @@ async function fetcher(url: string, options: RequestInit = {}) {
 
   const res = await fetch(`${API_BASE}${url}`, { ...options, headers });
   if (!res.ok) {
-    if (res.status === 401) {
+    if (res.status === 401 && !window.location.pathname.includes('/login') && !window.location.pathname.includes('/signup')) {
       localStorage.removeItem('token');
       window.location.href = '/login';
     }
@@ -34,6 +34,7 @@ export const api = {
     create: (data: Partial<Project>): Promise<Project> => fetcher('/projects', { method: 'POST', body: JSON.stringify(data) }),
     get: (id: string): Promise<Project> => fetcher(`/projects/${id}`),
     members: (id: string): Promise<Member[]> => fetcher(`/projects/${id}/members`),
+    update: (id: string, data: Partial<Project>) => fetcher(`/projects/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
     addMember: (id: string, data: { email: string; role: string }) => fetcher(`/projects/${id}/members`, { method: 'POST', body: JSON.stringify(data) }),
     removeMember: (id: string, userId: number) => fetcher(`/projects/${id}/members/${userId}`, { method: 'DELETE' }),
     delete: (id: string) => fetcher(`/projects/${id}`, { method: 'DELETE' }),

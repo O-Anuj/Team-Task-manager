@@ -143,14 +143,17 @@ async function startServer() {
   // Auth
   app.post('/api/auth/signup', async (req, res) => {
     const { name, email, password, role } = req.body;
+    console.log('Signup request:', { name, email, role });
     try {
       const hashedPassword = await bcrypt.hash(password, 10);
       const stmt = db.prepare('INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, ?)');
-      const result = stmt.run(name, email, hashedPassword, role || 'Member');
-      const user = { id: result.lastInsertRowid, name, email, role: role || 'Member' };
+      const result = stmt.run(name, email.toLowerCase().trim(), hashedPassword, role || 'Member');
+      const user = { id: result.lastInsertRowid, name, email: email.toLowerCase().trim(), role: role || 'Member' };
       const token = jwt.sign(user, JWT_SECRET);
+      console.log('Signup successful for:', email);
       res.status(201).json({ user, token });
     } catch (err: any) {
+      console.error('Signup error:', err);
       if (err.message.includes('UNIQUE constraint failed')) {
         return res.status(400).json({ error: 'Email already exists' });
       }
@@ -160,10 +163,23 @@ async function startServer() {
 
   app.post('/api/auth/login', async (req, res) => {
     const { email, password } = req.body;
-    const user: any = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
-    if (!user || !(await bcrypt.compare(password, user.password))) {
+    const cleanEmail = email.toLowerCase().trim();
+    console.log('Login attempt for:', cleanEmail);
+    
+    const user: any = db.prepare('SELECT * FROM users WHERE LOWER(email) = ?').get(cleanEmail);
+    
+    if (!user) {
+      console.log('Login failed: User not found:', cleanEmail);
       return res.status(401).json({ error: 'Invalid credentials' });
     }
+
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      console.log('Login failed: Password mismatch for:', cleanEmail);
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    console.log('Login successful for:', cleanEmail);
     const safeUser = { id: user.id, name: user.name, email: user.email, role: user.role };
     const token = jwt.sign(safeUser, JWT_SECRET);
     res.json({ user: safeUser, token });
@@ -221,6 +237,28 @@ async function startServer() {
     
     if (!project) return res.sendStatus(404);
     res.json(project);
+  });
+
+  app.patch('/api/projects/:id', authenticateToken, (req: any, res) => {
+    const { name, description } = req.body;
+    const projectId = req.params.id;
+
+    // Check if user is Admin
+    const member: any = db.prepare('SELECT role FROM project_members WHERE project_id = ? AND user_id = ?').get(projectId, req.user.id);
+    if (!member || member.role !== 'Admin') {
+      return res.status(403).json({ error: 'Only project Admins can edit project details' });
+    }
+
+    const updates = [];
+    const values = [];
+    if (name) { updates.push('name = ?'); values.push(name); }
+    if (description !== undefined) { updates.push('description = ?'); values.push(description); }
+
+    if (updates.length > 0) {
+      db.prepare(`UPDATE projects SET ${updates.join(', ')} WHERE id = ?`).run(...values, projectId);
+    }
+
+    res.json({ success: true });
   });
 
   app.delete('/api/projects/:id', authenticateToken, (req: any, res) => {
@@ -286,12 +324,31 @@ async function startServer() {
 
   // Tasks
   app.get('/api/projects/:id/tasks', authenticateToken, (req: any, res) => {
-    const tasks = db.prepare(`
-      SELECT t.*, u.name as assignee_name
-      FROM tasks t
-      LEFT JOIN users u ON t.assignee_id = u.id
-      WHERE t.project_id = ?
-    `).all(req.params.id);
+    const projectId = req.params.id;
+    const userId = req.user.id;
+
+    // Check project membership and role
+    const member: any = db.prepare('SELECT role FROM project_members WHERE project_id = ? AND user_id = ?').get(projectId, userId);
+    if (!member) return res.sendStatus(403);
+
+    let tasks;
+    if (member.role === 'Admin') {
+      // Admins see all tasks in the project
+      tasks = db.prepare(`
+        SELECT t.*, u.name as assignee_name
+        FROM tasks t
+        LEFT JOIN users u ON t.assignee_id = u.id
+        WHERE t.project_id = ?
+      `).all(projectId);
+    } else {
+      // Members only see tasks assigned to them
+      tasks = db.prepare(`
+        SELECT t.*, u.name as assignee_name
+        FROM tasks t
+        LEFT JOIN users u ON t.assignee_id = u.id
+        WHERE t.project_id = ? AND t.assignee_id = ?
+      `).all(projectId, userId);
+    }
     res.json(tasks);
   });
 
@@ -362,51 +419,57 @@ async function startServer() {
   // Dashboard Stats
   app.get('/api/stats', authenticateToken, (req: any, res) => {
     const userId = req.user.id;
-    const stats = {
-      totalTasks: (db.prepare(`
-        SELECT COUNT(*) as count 
-        FROM tasks t
-        JOIN project_members pm ON t.project_id = pm.project_id
-        WHERE pm.user_id = ?
-      `).get(userId) as any).count,
-      
-      byStatus: db.prepare(`
-        SELECT status, COUNT(*) as count 
-        FROM tasks t
-        JOIN project_members pm ON t.project_id = pm.project_id
-        WHERE pm.user_id = ?
-        GROUP BY status
-      `).all(userId),
-      
-      assignedToMe: (db.prepare('SELECT COUNT(*) as count FROM tasks WHERE assignee_id = ?').get(userId) as any).count,
-      
-      overdueTasks: db.prepare(`
-        SELECT t.*, p.name as project_name, u.name as assignee_name
-        FROM tasks t
-        JOIN projects p ON t.project_id = p.id
-        JOIN project_members pm ON t.project_id = pm.project_id
-        LEFT JOIN users u ON t.assignee_id = u.id
-        WHERE pm.user_id = ? AND t.due_date < ? AND t.status != 'Done'
-        ORDER BY t.due_date ASC
-      `).all(userId, new Date().toISOString()),
+    const now = new Date().toISOString();
 
-      tasksPerUser: db.prepare(`
-        SELECT u.name, COUNT(t.id) as count
-        FROM users u
-        JOIN project_members pm ON u.id = pm.user_id
-        LEFT JOIN tasks t ON u.id = t.assignee_id AND t.project_id = pm.project_id
-        WHERE pm.project_id IN (SELECT project_id FROM project_members WHERE user_id = ?)
-        GROUP BY u.id
-      `).all(userId),
-      
-      overdue: (db.prepare(`
-        SELECT COUNT(*) as count 
-        FROM tasks t
-        JOIN project_members pm ON t.project_id = pm.project_id
-        WHERE pm.user_id = ? AND due_date < ? AND status != 'Done'
-      `).get(userId, new Date().toISOString()) as any).count
-    };
-    res.json(stats);
+    // Get all projects where the user is an Admin
+    const adminProjects = db.prepare("SELECT project_id FROM project_members WHERE user_id = ? AND role = 'Admin'").all(userId) as any[];
+    const adminProjectIds = adminProjects.map(p => p.project_id);
+    
+    // Get all projects the user is a member of
+    const allProjects = db.prepare('SELECT project_id FROM project_members WHERE user_id = ?').all(userId) as any[];
+    const allProjectIds = allProjects.map(p => p.project_id);
+
+    if (allProjectIds.length === 0) {
+      return res.json({ totalTasks: 0, byStatus: [], assignedToMe: 0, overdueTasks: [], tasksPerUser: [], overdue: 0 });
+    }
+
+    const placeholders = allProjectIds.map(() => '?').join(',');
+    
+    const statsArgs = [...(adminProjectIds.length > 0 ? adminProjectIds : [-1]), userId, ...allProjectIds];
+    const baseFilter = `WHERE (project_id IN (${adminProjectIds.length > 0 ? adminProjectIds.map(() => '?').join(',') : '?'}) OR assignee_id = ?) AND project_id IN (${placeholders})`;
+
+    const totalTasks = (db.prepare(`SELECT COUNT(*) as count FROM tasks ${baseFilter}`).get(...statsArgs) as any).count;
+    const byStatus = db.prepare(`SELECT status, COUNT(*) as count FROM tasks ${baseFilter} GROUP BY status`).all(...statsArgs);
+    const overdueCount = (db.prepare(`SELECT COUNT(*) as count FROM tasks ${baseFilter} AND due_date < ? AND status != 'Done'`).get(...statsArgs, now) as any).count;
+
+    const overdueTasks = db.prepare(`
+      SELECT t.*, p.name as project_name, u.name as assignee_name
+      FROM tasks t
+      JOIN projects p ON t.project_id = p.id
+      LEFT JOIN users u ON t.assignee_id = u.id
+      ${baseFilter.replace('WHERE', 'WHERE t.')}
+      AND t.due_date < ? AND t.status != 'Done'
+      ORDER BY t.due_date ASC
+      LIMIT 10
+    `).all(...statsArgs, now);
+
+    const tasksPerUser = adminProjectIds.length > 0 ? db.prepare(`
+      SELECT u.name, COUNT(t.id) as count
+      FROM users u
+      JOIN project_members pm ON u.id = pm.user_id
+      LEFT JOIN tasks t ON u.id = t.assignee_id AND t.project_id = pm.project_id
+      WHERE pm.project_id IN (${adminProjectIds.map(() => '?').join(',')})
+      GROUP BY u.id
+    `).all(...adminProjectIds) : [];
+
+    res.json({
+      totalTasks,
+      byStatus,
+      assignedToMe: (db.prepare('SELECT COUNT(*) as count FROM tasks WHERE assignee_id = ?').get(userId) as any).count,
+      overdueTasks,
+      tasksPerUser,
+      overdue: overdueCount
+    });
   });
 
   // User search (for adding members)
