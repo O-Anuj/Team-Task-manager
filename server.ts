@@ -1,6 +1,7 @@
 import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import Database from 'better-sqlite3';
 import jwt from 'jsonwebtoken';
@@ -15,7 +16,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key';
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 // --- SQL Initialization (Relational Data) ---
 const db = new Database('teamflow.db');
@@ -498,14 +499,25 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
-    });
+    if (fs.existsSync(distPath)) {
+      app.use(express.static(distPath));
+      app.get('*', (req, res) => {
+        const indexPath = path.join(distPath, 'index.html');
+        if (fs.existsSync(indexPath)) {
+          res.sendFile(indexPath);
+        } else {
+          res.status(404).send('Built index.html not found. Please ensure "npm run build" completed successfully.');
+        }
+      });
+    } else {
+      app.get('*', (req, res) => {
+        res.status(500).send('Dist folder not found. Please run "npm run build" before starting the server.');
+      });
+    }
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`Server running in ${process.env.NODE_ENV || 'development'} mode on port ${PORT}`);
   });
 }
 
