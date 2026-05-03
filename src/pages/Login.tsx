@@ -19,13 +19,11 @@ export default function Login() {
     
     setLoading(true);
     setError('');
-    console.log('Attempting login for:', email);
     try {
       const data = await api.auth.login({ email: email.trim(), password });
       login(data.token, data.user);
       navigate('/');
     } catch (err: any) {
-      console.error('Login failed:', err);
       setError(err.message);
     } finally {
       setLoading(false);

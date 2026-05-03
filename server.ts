@@ -142,15 +142,20 @@ async function startServer() {
 
   // Auth
   app.post('/api/auth/signup', async (req, res) => {
-    const { name, email, password, role } = req.body;
-    console.log('Signup request:', { name, email, role });
     try {
+      const { name, email, password, role } = req.body;
+      if (!name || !email || !password) {
+        return res.status(400).json({ error: 'Missing required fields' });
+      }
+
+      const cleanEmail = email.toLowerCase().trim();
       const hashedPassword = await bcrypt.hash(password, 10);
       const stmt = db.prepare('INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, ?)');
-      const result = stmt.run(name, email.toLowerCase().trim(), hashedPassword, role || 'Member');
-      const user = { id: result.lastInsertRowid, name, email: email.toLowerCase().trim(), role: role || 'Member' };
+      const result = stmt.run(name.trim(), cleanEmail, hashedPassword, role || 'Member');
+      
+      const user = { id: result.lastInsertRowid, name: name.trim(), email: cleanEmail, role: role || 'Member' };
       const token = jwt.sign(user, JWT_SECRET);
-      console.log('Signup successful for:', email);
+      
       res.status(201).json({ user, token });
     } catch (err: any) {
       console.error('Signup error:', err);
@@ -162,27 +167,31 @@ async function startServer() {
   });
 
   app.post('/api/auth/login', async (req, res) => {
-    const { email, password } = req.body;
-    const cleanEmail = email.toLowerCase().trim();
-    console.log('Login attempt for:', cleanEmail);
-    
-    const user: any = db.prepare('SELECT * FROM users WHERE LOWER(email) = ?').get(cleanEmail);
-    
-    if (!user) {
-      console.log('Login failed: User not found:', cleanEmail);
-      return res.status(401).json({ error: 'Invalid credentials' });
-    }
+    try {
+      const { email, password } = req.body;
+      if (!email || !password) {
+        return res.status(400).json({ error: 'Missing credentials' });
+      }
 
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) {
-      console.log('Login failed: Password mismatch for:', cleanEmail);
-      return res.status(401).json({ error: 'Invalid credentials' });
-    }
+      const cleanEmail = email.toLowerCase().trim();
+      const user: any = db.prepare('SELECT * FROM users WHERE LOWER(email) = ?').get(cleanEmail);
+      
+      if (!user) {
+        return res.status(401).json({ error: 'Invalid credentials' });
+      }
 
-    console.log('Login successful for:', cleanEmail);
-    const safeUser = { id: user.id, name: user.name, email: user.email, role: user.role };
-    const token = jwt.sign(safeUser, JWT_SECRET);
-    res.json({ user: safeUser, token });
+      const isMatch = await bcrypt.compare(password, user.password);
+      if (!isMatch) {
+        return res.status(401).json({ error: 'Invalid credentials' });
+      }
+
+      const safeUser = { id: user.id, name: user.name, email: user.email, role: user.role };
+      const token = jwt.sign(safeUser, JWT_SECRET);
+      res.json({ user: safeUser, token });
+    } catch (err: any) {
+      console.error('Login error:', err);
+      res.status(500).json({ error: 'Internal server error' });
+    }
   });
 
   app.get('/api/auth/me', authenticateToken, (req: any, res) => {

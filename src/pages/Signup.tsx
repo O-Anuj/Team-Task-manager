@@ -22,13 +22,11 @@ export default function Signup() {
     setLoading(true);
     setError('');
     const cleanEmail = email.toLowerCase().trim();
-    console.log('Attempting signup for:', cleanEmail);
     try {
       const data = await api.auth.signup({ name: name.trim(), email: cleanEmail, password, role });
       login(data.token, data.user);
       navigate('/');
     } catch (err: any) {
-      console.error('Signup failed:', err);
       setError(err.message);
     } finally {
       setLoading(false);
